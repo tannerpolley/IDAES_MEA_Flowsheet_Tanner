@@ -8,9 +8,10 @@ from idaes.models_extra.column_models.properties.MEA_vapor import visc_d_comp
 
 
 def save_run_profiles(m):
+
     n = len(m.fs.unit.vapor_phase.length_domain)
     H = value(m.fs.unit.length_column)
-    stages = np.linspace(0, H, n)
+    stages = np.linspace(0, 1.0, n)
     z_range = np.linspace(0, 1.0, n)
     dz = z_range[1] - z_range[0]
 
@@ -140,6 +141,7 @@ def save_run_profiles(m):
 
         CO2_arr[i] = [Nl_CO2, Nv_CO2, kv_CO2, a_eA, DF_CO2, Pv_CO2, Pl_CO2, psi, H_CO2_mix]
         CO2_string = ['Nl_CO2', 'Nv_CO2', 'kv_CO2', 'a_eA', 'DF_CO2', 'Pv_CO2', 'Pl_CO2', 'Psi', 'H_CO2_mix']
+        y_CO2 = value(vp.mole_frac_comp['CO2'])
         y_H2O = value(vp.mole_frac_comp['H2O'])
         x_H2O_true = value(lp.mole_frac_phase_comp_true['Liq', 'H2O'])
         H2O_arr[i] = [Nl_H2O, Nv_H2O, kv_H2O, a_eA, DF_H2O, Pv_H2O, Pl_H2O, y_H2O, P, x_H2O_true, Psat_H2O]
@@ -219,8 +221,10 @@ def save_run_profiles(m):
         Cl_MEA_true = value(lp.conc_mol_phase_comp_true['Liq', 'MEA'])
         enhance_arr[i] = [k2_rate, Cl_MEA_true, Dl_CO2, kl_CO2, Ha, E, psi]
         enhance_string = ['k2_rate', 'Cl_MEA_true', 'Dl_CO2', 'kl_CO2', 'Ha', 'E', 'psi']
-        enhance_2_arr[i] = [E, Pv_CO2, DF_CO2]
-        enhance_2_string = ['E', 'P_CO2', 'P_equil']
+        P_CO2_equil = P*(y_CO2 * psi*Cl_MEA_true/P)/(1 + psi/H_CO2_mix)
+
+        enhance_2_arr[i] = [E, Pv_CO2, P_CO2_equil]
+        enhance_2_string = ['E', 'P_CO2', 'P_CO2_equil']
 
         # Chemical Equilibrium
         K_eq_car = np.exp(value(lp.log_k_eq['carbamate']))
@@ -285,33 +289,34 @@ def save_run_profiles(m):
 
     df = make_df(enhance_2_string, enhance_2_arr, 'enhance', return_df=True)
 
-    # wb = xw.Book('Simulation_Results/Profiles_IDAES.xlsx', read_only=False)
-    # i = 0
-    # for sheetname, df in zip(sheetnames, dfs):
-    #     try:
-    #         wb.sheets[sheetname].clear()
-    #     except:
-    #         wb.sheets.add(sheetname)
-    #     wb.sheets[sheetname].range("A1").value = df
-    #
-    #     # wb.sheets[sheetname].activate()
-    #     # wb.sheets[sheetname].api.Application.ActiveWindow.SplitRow = 1
-    #     # wb.sheets[sheetname].api.Application.ActiveWindow.SplitColumn = 0
-    #     # wb.sheets[sheetname].api.Application.ActiveWindow.FreezePanes = True
-    #
-    # # for i, sheet_name in enumerate(sheetnames):
-    # #     sheet = wb.sheets[sheet_name]
-    # #     sheet.api.Move(Before=wb.sheets[i].api)
-    #
-    # for sheet in wb.sheets:
-    #     if sheet.name not in sheetnames:
-    #         sheet.delete()
-    # wb.save(path=r'Simulation_Results\Profiles_IDAES.xlsx')
+    wb = xw.Book('Simulation_Results/Profiles_IDAES.xlsx', read_only=False)
+    i = 0
+    print(sheetnames)
+    for sheetname, df in zip(sheetnames, dfs):
+        try:
+            wb.sheets[sheetname].clear()
+        except:
+            wb.sheets.add(sheetname)
+        wb.sheets[sheetname].range("A1").value = df
 
-    # Tl_sim = T_arr.T[0]
-    # i_inters = list(Tl_sim).index(max(Tl_sim))
-    # z_bulge = list(m.fs.unit.vapor_phase.length_domain)[i_inters]
-    # z_bulge = z_bulge * 6
+    #     wb.sheets[sheetname].activate()
+    #     wb.sheets[sheetname].api.Application.ActiveWindow.SplitRow = 1
+    #     wb.sheets[sheetname].api.Application.ActiveWindow.SplitColumn = 0
+    #     wb.sheets[sheetname].api.Application.ActiveWindow.FreezePanes = True
+    #
+    # for i, sheet_name in enumerate(sheetnames):
+    #     sheet = wb.sheets[sheet_name]
+    #     sheet.api.Move(Before=wb.sheets[i].api)
+
+    for sheet in wb.sheets:
+        if sheet.name not in sheetnames:
+            sheet.delete()
+    wb.save(path=r'Simulation_Results\Profiles_IDAES.xlsx')
+
+    Tl_sim = T_arr.T[0]
+    i_inters = list(Tl_sim).index(max(Tl_sim))
+    z_bulge = list(m.fs.unit.vapor_phase.length_domain)[i_inters]
+    z_bulge = z_bulge * 6
 
     return df
 

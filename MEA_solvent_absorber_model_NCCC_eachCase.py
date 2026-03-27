@@ -55,6 +55,8 @@ from mea_properties import (
     initialize_inherent_reactions
 )
 
+from Convert_Data import convert_data
+
 # -----------------------------------------------------------------------------
 solver = get_solver()
 # solver.options["bound_push"] = 1e-22
@@ -309,6 +311,7 @@ def set_inputs(m, input_dic=NCCC_test, case='K13'):
 
     # Fix operating conditions
     # Flue gas
+
     m.fs.unit.vapor_inlet.flow_mol.fix(input_dic[case]['vapor_inlet']['flow_mol'])
     m.fs.unit.vapor_inlet.temperature.fix(input_dic[case]['vapor_inlet']['temperature'])
     m.fs.unit.vapor_inlet.pressure.fix(input_dic[case]['vapor_inlet']['pressure'])
@@ -317,7 +320,6 @@ def set_inputs(m, input_dic=NCCC_test, case='K13'):
     m.fs.unit.vapor_inlet.mole_frac_comp[0, "H2O"].fix(input_dic[case]['vapor_inlet']['mole_frac_comp']['H2O'])
     m.fs.unit.vapor_inlet.mole_frac_comp[0, "N2"].fix(input_dic[case]['vapor_inlet']['mole_frac_comp']['N2'])
     m.fs.unit.vapor_inlet.mole_frac_comp[0, "O2"].fix(input_dic[case]['vapor_inlet']['mole_frac_comp']['O2'])
-
     # Solvent liquid
     m.fs.unit.liquid_inlet.flow_mol.fix(input_dic[case]['liquid_inlet']['flow_mol'])
     m.fs.unit.liquid_inlet.temperature.fix(input_dic[case]['liquid_inlet']['temperature'])
@@ -876,10 +878,13 @@ if __name__ == "__main__":
 
 
     df = pd.read_csv('enhancement_factor_runs.csv')
+    df = pd.read_csv('runs_file_NCCC_LHC_2.csv', index_col=0)
 
-    E_cases = get_nested_dic(df)
+    df_runs = pd.read_csv('runs_file_NCCC_LHC_2.csv', index_col=0)
+    E_cases = convert_data(df_runs, run=1)
+    # E_cases = get_nested_dic(df)
 
-    nfe = 40
+    nfe = 100
     x_nfe_list = get_uniform_grid(nfe)
     # x_nfe_list = get_custom_grid_dx([0.3, 0.8], [0.005, 0.1, 0.005])
     # x_nfe_list = get_custom_grid_nfe([0.3, 0.8], [50, 10, 40])
@@ -905,8 +910,9 @@ if __name__ == "__main__":
             bounded_vars = bounded_vars + 1
     print('Number of bounded variables: ', value(bounded_vars))
 
-    df_runs = pd.read_csv('enhancement_factor_runs.csv')
-    E_cases = get_nested_dic(df_runs)
+    df_runs = pd.read_csv('runs_file_NCCC_LHC_2.csv', index_col=0)
+    E_cases = convert_data(df_runs, run=1)
+    print(E_cases)
 
     dfs = []
     sheetnames = []
@@ -917,86 +923,85 @@ if __name__ == "__main__":
         # case_number = case_number_list[k]
 
         df_new = df_runs.iloc[k]
-        Tl, loading, L_G = df_new['Tl'], df_new['loading'], df_new['L/G']
-        print(Tl, loading, L_G)
+        # Tl, loading, L_G = df_new['Tl'], df_new['loading'], df_new['L/G']
+        # print(Tl, loading, L_G)
 
         print('degrees_of_freedom = {}'.format(degrees_of_freedom(m)))
         set_inputs(m, case=str(k+1), input_dic=E_cases)
         print('degrees_of_freedom = {}'.format(degrees_of_freedom(m)))
 
-        try:
-            m.fs.unit.initialize(
-                outlvl=idaeslog.INFO_HIGH,
-                optarg={
-                    'nlp_scaling_method': 'user-scaling',
-                    'linear_solver': 'ma57',
-                    'OF_ma57_automatic_scaling': 'yes',
-                    'max_iter': 300,
-                    'tol': 1e-8,
-                }
-            )
-
-            print("\nSolve model, some variable bounds stripped ...")
-            print("\n")
-
-            # Solve model
-            optarg = {
+        m.fs.unit.initialize(
+            outlvl=idaeslog.INFO_HIGH,
+            optarg={
                 'nlp_scaling_method': 'user-scaling',
                 'linear_solver': 'ma57',
                 'OF_ma57_automatic_scaling': 'yes',
-                'max_iter': 300,
-                'tol': 1e-8,
+                'max_iter': 1000,
+                'tol': 1e-3,
             }
-            solver.options = optarg
+        )
 
-            res = solver.solve(m, tee=False)
-            # Check whether mass & energy balances close
-            # check_conservation(m)
-            # check_scaling(m)
+        print("\nSolve model, some variable bounds stripped ...")
+        print("\n")
 
-            # constrviol = large_residuals_set(m.fs.unit)
-            # print(constrviol)
+        # Solve model
+        optarg = {
+            'nlp_scaling_method': 'user-scaling',
+            'linear_solver': 'ma57',
+            'OF_ma57_automatic_scaling': 'yes',
+            'max_iter': 1000,
+            'tol': 1e-1,
+        }
+        solver.options = optarg
 
-            assert check_optimal_termination(res)
+        res = solver.solve(m, tee=False)
+        # Check whether mass & energy balances close
+        # check_conservation(m)
+        # check_scaling(m)
 
-            # print('degrees_of_freedom = {}'.format(degrees_of_freedom(m)))
+        # constrviol = large_residuals_set(m.fs.unit)
+        # print(constrviol)
 
-            # model_results()
-            # validation_plot(m, case_number)
-            # model_robustness_stats()
+        assert check_optimal_termination(res)
 
-            print("\n-------- Simulation Results --------")
-            print_column_design_parameters(m)
+        # print('degrees_of_freedom = {}'.format(degrees_of_freedom(m)))
 
-            import importlib
-            import save_run_profiles
+        # model_results()
+        # validation_plot(m, case_number)
+        # model_robustness_stats()
 
-            importlib.reload(save_run_profiles)
+        print("\n-------- Simulation Results --------")
+        print_column_design_parameters(m)
 
-            df = save_run_profiles.save_run_profiles(m)
+        import importlib
+        import save_run_profiles
+        import matplotlib.pyplot as plt
 
-            dfs.append(df)
-            sheetnames.append(f'Tl={Tl},alpha={loading},L_G ={L_G}')
+        importlib.reload(save_run_profiles)
 
-        except:
-            continue
+        df = save_run_profiles.save_run_profiles(m)
 
-    import xlwings as xw
-    filename = 'Simulation_Results/Profiles_Reduced_Enhancement_Factor.xlsx'
-    filename = 'Simulation_Results/Profiles_Implicit_Enhancement_Factor.xlsx'
-    wb = xw.Book(filename, read_only=False)
 
-    for sheetname, df in zip(sheetnames, dfs):
-        try:
-            wb.sheets[sheetname].clear()
-        except:
-            wb.sheets.add(sheetname)
-        wb.sheets[sheetname].range("A1").value = df
+            # dfs.append(df)
+            # sheetnames.append(f'Tl={Tl},alpha={loading},L_G ={L_G}')
 
-    for sheet in wb.sheets:
-        if sheet.name not in sheetnames:
-            sheet.delete()
-    wb.save(path=filename)
+    #
+    # import xlwings as xw
+    # filename = 'Simulation_Results/Profiles_Explicit_Enhancement_Factor.xlsx'
+    # filename = 'Simulation_Results/Profiles_Implicit_Enhancement_Factor.xlsx'
+    # wb = xw.Book(filename, read_only=False)
+    #
+    # for sheetname, df in zip(sheetnames, dfs):
+    #     try:
+    #         wb.sheets[sheetname].clear()
+    #     except:
+    #         wb.sheets.add(sheetname)
+    #     wb.sheets[sheetname].range("A1").value = df
+    #
+    # for sheet in wb.sheets:
+    #     if sheet.name not in sheetnames:
+    #         sheet.delete()
+    # wb.save(path=filename)
         #%%
     #     print("\n-------- Simulation Results --------")
     #     print_column_design_parameters(m)
@@ -1093,9 +1098,9 @@ if __name__ == "__main__":
     #     df_out_vapvel.to_csv(vapor_phase_velocity)
     #     df_out_loading.to_csv(solvent_loading)
     #
-    # print("\n")
-    # print("----------------------------------------------------------")
-    # print('Total simulation time: ', value(time.time() - ts), " s")
-    # print("----------------------------------------------------------")
+    print("\n")
+    print("----------------------------------------------------------")
+    print('Total simulation time: ', value(time.time() - ts), " s")
+    print("----------------------------------------------------------")
 
     #%%
