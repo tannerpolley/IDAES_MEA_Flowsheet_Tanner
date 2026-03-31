@@ -29,6 +29,7 @@ from pyomo.util.calc_var_value import calculate_variable_from_constraint
 # Import IDAES Libraries
 from idaes.core import FlowsheetBlock
 from idaes.models_extra.column_models.MEAsolvent_column import MEAColumn
+from idaes.models_extra.column_models import MEAsolvent_column as mea_column_module
 
 from idaes.core.util.model_statistics import (
     degrees_of_freedom,
@@ -224,9 +225,12 @@ def scale_absorber(column):
 
             ssf(column.liquid_phase.heat[t, x], 1e-4)
 
-            if column.config.surrogate_enhancement_factor_model is None:
+            if (
+                getattr(column.config, "surrogate_enhancement_factor_model", None) is None
+                and hasattr(column, "conc_CO2_bulk")
+            ):
                 ssf(column.conc_CO2_bulk[t, x], 3)
-                if x != column.liquid_phase.length_domain.last():
+                if x != column.liquid_phase.length_domain.last() and hasattr(column, "conc_CO2_equil_bulk_eqn"):
                     cst(column.conc_CO2_equil_bulk_eqn[t, x], 10)
 
         for x in column.vapor_phase.length_domain:
@@ -502,6 +506,12 @@ if __name__ == "__main__":
 
     ts = time.time()
 
+    enhancement_mode = getattr(mea_column_module, "enhance_model", None)
+    mode_name = {1: "Explicit", 2: "Implicit", 3: "Third_Order"}.get(
+        enhancement_mode, f"Mode_{enhancement_mode}"
+    )
+    print(f"Active enhancement-factor mode: {mode_name}")
+
     nfe = 40
     use_surrogate = False
     x_nfe_list = get_uniform_grid(nfe)
@@ -520,129 +530,108 @@ if __name__ == "__main__":
     # lean_flow_rate = [20000, 21000, 22000, 23000, 24000, 25000,
     #                   26000, 27000, 28000, 29000, 30000]  #[25500]
     vapor_flow_rate = 12000
-    # L_G = np.array([1.5, 2.25, 3.0])
-    # CO2_loading_list = [0.20, 0.30, 0.40]
-    # inlet_Tl = [320, 330, 340]
-    Tl = 332.495
-    L_G_list = np.linspace(1.0, 3.0, 11)
-    CO2_loading_list = np.linspace(.3, .5, 11)
+    inlet_Tl = [340, 330, 320]
+    L_G_list = [2.0, 1.5, 1.0]
+    CO2_loading_list = [0.5, 0.45, 0.4]
     data = []
 
-    for alpha in CO2_loading_list:
-        for L_G in L_G_list:
+    for Tl in inlet_Tl:
+        for alpha in CO2_loading_list:
+            for L_G in L_G_list:
 
-            ts_loopstart = time.time()
-            print(f'Running with alpha = {alpha}, L/G = {L_G}')
+                ts_loopstart = time.time()
+                print(f'Running with Tl = {Tl}, alpha = {alpha}, L/G = {L_G}')
 
-            m = build_column_model(x_nfe_list, use_surrogate=use_surrogate)
+                m = build_column_model(x_nfe_list, use_surrogate=use_surrogate)
 
-            set_inputs(alpha, H2O_loading, L_G*vapor_flow_rate, Tl)
+                set_inputs(alpha, H2O_loading, L_G*vapor_flow_rate, Tl)
 
-            scale_mea_liquid_params(m.fs.liquid_properties, ions=True, scaling_factor_flow_mol=3e-4)
-            scale_mea_vapor_params(m.fs.vapor_properties, scaling_factor_flow_mol=3e-4)
+                scale_mea_liquid_params(m.fs.liquid_properties, ions=True, scaling_factor_flow_mol=3e-4)
+                scale_mea_vapor_params(m.fs.vapor_properties, scaling_factor_flow_mol=3e-4)
 
-            define_column_design_parameters(m)
+                define_column_design_parameters(m)
 
-            switch_liquid_to_parmest_params(m.fs.liquid_properties, ions=True)
-            scale_absorber(m.fs.absorber)
-            # strip_statevar_bounds_for_initialization(m)
-            initialize_inherent_reactions(m.fs.absorber.liquid_phase)
+                switch_liquid_to_parmest_params(m.fs.liquid_properties, ions=True)
+                scale_absorber(m.fs.absorber)
+                # strip_statevar_bounds_for_initialization(m)
+                initialize_inherent_reactions(m.fs.absorber.liquid_phase)
 
-            iscale.calculate_scaling_factors(m)
+                iscale.calculate_scaling_factors(m)
 
-            m.fs.absorber.initialize(
-                outlvl=idaeslog.INFO_LOW,
-                optarg=optarg
-            )
+                m.fs.absorber.initialize(
+                    outlvl=idaeslog.INFO_LOW,
+                    optarg=optarg
+                )
 
-            # check_scaling(m)
+                # check_scaling(m)
 
-            # # Strip all bounds - works only for simulations (square problems)
-            xfrm = TransformationFactory('contrib.strip_var_bounds')
-            xfrm.apply_to(m, reversible=True)
-            # strip_some_statevar_bounds(m)
+                # # Strip all bounds - works only for simulations (square problems)
+                xfrm = TransformationFactory('contrib.strip_var_bounds')
+                xfrm.apply_to(m, reversible=True)
+                # strip_some_statevar_bounds(m)
 
-            bounded_vars = 0
-            for v in m.component_data_objects(Var, descend_into=True):
-                if v.lb != None or v.ub != None:
-                    # print(v.name, v.lb, v.ub)
-                    bounded_vars = bounded_vars + 1
-            # print('Number of bounded variables: ', value(bounded_vars))
+                bounded_vars = 0
+                for v in m.component_data_objects(Var, descend_into=True):
+                    if v.lb != None or v.ub != None:
+                        # print(v.name, v.lb, v.ub)
+                        bounded_vars = bounded_vars + 1
+                # print('Number of bounded variables: ', value(bounded_vars))
 
-            # Fix unused variables
-            unused_vars_set = unused_variables_set(m)
+                # Fix unused variables
+                unused_vars_set = unused_variables_set(m)
 
-            numberof_unused_vars = 0
-            for unused_vars in unused_vars_set:
-                unused_vars.fix()
-                numberof_unused_vars = numberof_unused_vars + 1
-            # print('Number of fixed unused variables: ', value(numberof_unused_vars))
-            # print("\nSolve model, variable bounds stripped ...")
-            # print("\n")
+                numberof_unused_vars = 0
+                for unused_vars in unused_vars_set:
+                    unused_vars.fix()
+                    numberof_unused_vars = numberof_unused_vars + 1
+                # print('Number of fixed unused variables: ', value(numberof_unused_vars))
+                # print("\nSolve model, variable bounds stripped ...")
+                # print("\n")
 
-            # Solve model
-            solver.options = optarg
-            # try:
-            res = solver.solve(m, tee=False)
-            # Check whether mass & energy balances close
-            pyomo.opt.assert_optimal_termination(res)
+                # Solve model
+                solver.options = optarg
+                # try:
+                res = solver.solve(m, tee=False)
+                # Check whether mass & energy balances close
+                pyomo.opt.assert_optimal_termination(res)
 
-            # constrviol = large_residuals_set(m.fs.absorber)
-            # print(constrviol)
+                # constrviol = large_residuals_set(m.fs.absorber)
+                # print(constrviol)
 
-            # assert check_optimal_termination(res)
+                # assert check_optimal_termination(res)
 
-            # print('degrees_of_freedom = {}'.format(degrees_of_freedom(m)))
-            # check_conservation()
-            # model_results()
-            # profiles_plot(m, CO2_loading_list[k], lean_flow_rate[l])
-            # model_robustness_stats()
+                # print('degrees_of_freedom = {}'.format(degrees_of_freedom(m)))
+                # check_conservation()
+                # model_results()
+                # profiles_plot(m, CO2_loading_list[k], lean_flow_rate[l])
+                # model_robustness_stats()
 
-            # print("\n-------- Simulation Results --------")
-            # print_column_design_parameters(m)
+                # print("\n-------- Simulation Results --------")
+                # print_column_design_parameters(m)
 
-            import importlib
-            import save_run_profiles
+                import importlib
+                import save_run_profiles
 
-            importlib.reload(save_run_profiles)
+                importlib.reload(save_run_profiles)
 
-            df = save_run_profiles.save_run_profiles(m)
+                df = save_run_profiles.save_run_profiles(m)
 
-            CO2_cap = value(m.fs.absorber.co2_capture[0])
-            dfs.append(df)
-            data.append([L_G, alpha, CO2_cap])
-            # print(f'alpha={alpha},L_G={L_G},CO2_cap={CO2_cap:.3f}')
-            sheetname = f'α={alpha:.2f},L_G={L_G:.2f},CO2%={CO2_cap:.2f}'
-            print(len(sheetname))
-            print(sheetname)
-            print()
-            sheetnames.append(sheetname)
-            # sheetnames.append(f'alpha={alpha},L_G={L_G},CO2_cap=')
+                CO2_cap = value(m.fs.absorber.co2_capture[0])
+                dfs.append(df)
+                data.append([Tl, L_G, alpha, CO2_cap])
+                sheetname = f'Tl={Tl},alpha={alpha},L_G ={L_G}'
+                print(sheetname)
+                print()
+                sheetnames.append(sheetname)
     data = np.array(data)
-    pd.DataFrame(data, columns=['L/G', 'alpha', 'CO2_capture']).to_csv('Simulation_Results/surface_data_implicit.csv')
+    pd.DataFrame(data, columns=['Tl', 'L/G', 'alpha', 'CO2_capture']).to_csv(
+        f'Simulation_Results/surface_data_{mode_name.lower()}_low_capture.csv'
+    )
 
-    import xlwings as xw
-    import os
-
-    filename = 'Simulation_Results/Profiles_Implicit_Enhancement_Factor.xlsx'
-    # filename = 'Simulation_Results/Profiles_Explicit_Enhancement_Factor_low_capture.xlsx'
-    if not os.path.exists(filename):
-        wb = xw.Book()
-        wb.save(filename)
-    else:
-        wb = xw.Book(filename, read_only=False)
-
-    for sheetname, df in zip(sheetnames, dfs):
-        try:
-            wb.sheets[sheetname].clear()
-        except:
-            wb.sheets.add(sheetname, after=wb.sheets[-1])
-        wb.sheets[sheetname].range("A1").value = df
-
-    for sheet in wb.sheets:
-        if sheet.name not in sheetnames:
-            sheet.delete()
-    wb.save(path=filename)
+    filename = f'Simulation_Results/Profiles_{mode_name}_Enhancement_Factor_low_capture.xlsx'
+    with pd.ExcelWriter(filename, engine="openpyxl", mode="w") as writer:
+        for sheetname, df in zip(sheetnames, dfs):
+            df.to_excel(writer, sheet_name=sheetname)
 
     # # Check if results folder exists (create if it does not exist), save results as .csv
     # # Directory name

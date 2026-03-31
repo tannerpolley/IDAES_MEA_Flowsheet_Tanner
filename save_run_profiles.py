@@ -3,15 +3,19 @@ from pyomo.environ import value, units as pyunits, log
 from idaes.models.properties.modular_properties.eos.ideal import Ideal
 import numpy as np
 import pandas as pd
-import xlwings as xw
 from idaes.models_extra.column_models.properties.MEA_vapor import visc_d_comp
 
 
 def save_run_profiles(m):
+    column = getattr(m.fs, "unit", None)
+    if column is None:
+        column = getattr(m.fs, "absorber", None)
+    if column is None:
+        raise AttributeError("Expected flowsheet to define m.fs.unit or m.fs.absorber")
 
-    n = len(m.fs.unit.vapor_phase.length_domain)
-    H = value(m.fs.unit.length_column)
-    stages = np.linspace(0, 1.0, n)
+    n = len(column.vapor_phase.length_domain)
+    H = value(column.length_column)
+    stages = np.linspace(0.0, H, n)
     z_range = np.linspace(0, 1.0, n)
     dz = z_range[1] - z_range[0]
 
@@ -58,8 +62,8 @@ def save_run_profiles(m):
     vapor = ['CO2', 'H2O', 'N2', 'O2']
     flux_species = ['CO2', 'H2O']
 
-    for i, zl in enumerate(m.fs.unit.vapor_phase.length_domain):
-        blk = m.fs.unit
+    for i, zl in enumerate(column.vapor_phase.length_domain):
+        blk = column
         lunits = (
             blk.config.liquid_phase.property_package.get_metadata().get_derived_units
         )
@@ -221,7 +225,10 @@ def save_run_profiles(m):
         Cl_MEA_true = value(lp.conc_mol_phase_comp_true['Liq', 'MEA'])
         enhance_arr[i] = [k2_rate, Cl_MEA_true, Dl_CO2, kl_CO2, Ha, E, psi]
         enhance_string = ['k2_rate', 'Cl_MEA_true', 'Dl_CO2', 'kl_CO2', 'Ha', 'E', 'psi']
-        P_CO2_equil = P*(y_CO2 * psi*Cl_MEA_true/P)/(1 + psi/H_CO2_mix)
+        # Historical low-capture workbooks store the equilibrium CO2 partial
+        # pressure normalized by total pressure; the compare notebook later
+        # rescales it back to pressure units.
+        P_CO2_equil = (y_CO2 * psi * Cl_MEA_true / P) / (1 + psi / H_CO2_mix)
 
         enhance_2_arr[i] = [E, Pv_CO2, P_CO2_equil]
         enhance_2_string = ['E', 'P_CO2', 'P_CO2_equil']
@@ -288,34 +295,11 @@ def save_run_profiles(m):
     make_df(vap_prop_string, vap_prop_arr, 'vap_prop')
 
     df = make_df(enhance_2_string, enhance_2_arr, 'enhance', return_df=True)
-
-    wb = xw.Book('Simulation_Results/Profiles_IDAES.xlsx', read_only=False)
-    i = 0
-    print(sheetnames)
-    for sheetname, df in zip(sheetnames, dfs):
-        try:
-            wb.sheets[sheetname].clear()
-        except:
-            wb.sheets.add(sheetname)
-        wb.sheets[sheetname].range("A1").value = df
-
-    #     wb.sheets[sheetname].activate()
-    #     wb.sheets[sheetname].api.Application.ActiveWindow.SplitRow = 1
-    #     wb.sheets[sheetname].api.Application.ActiveWindow.SplitColumn = 0
-    #     wb.sheets[sheetname].api.Application.ActiveWindow.FreezePanes = True
-    #
-    # for i, sheet_name in enumerate(sheetnames):
-    #     sheet = wb.sheets[sheet_name]
-    #     sheet.api.Move(Before=wb.sheets[i].api)
-
-    for sheet in wb.sheets:
-        if sheet.name not in sheetnames:
-            sheet.delete()
-    wb.save(path=r'Simulation_Results\Profiles_IDAES.xlsx')
+    df["CO2_Capture"] = value(column.co2_capture[0])
 
     Tl_sim = T_arr.T[0]
     i_inters = list(Tl_sim).index(max(Tl_sim))
-    z_bulge = list(m.fs.unit.vapor_phase.length_domain)[i_inters]
+    z_bulge = list(column.vapor_phase.length_domain)[i_inters]
     z_bulge = z_bulge * 6
 
     return df
